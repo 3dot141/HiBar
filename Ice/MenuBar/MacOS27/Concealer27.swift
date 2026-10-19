@@ -108,6 +108,44 @@ final class Concealer27 {
         update()
     }
 
+    /// Infers a section for every application from where its items currently
+    /// sit on the bar: items left of Ice's own button belong to the hidden
+    /// section, which is what Ice's pre-27 dividers meant. Ice itself is
+    /// always visible, so its button can always bring the hidden applications
+    /// back. A layout the user saved in the Layout editor overrides this.
+    private static func layoutInferredByPosition() async -> [String: MacOS27Section] {
+        let items = await MenuBarItemProvider27.items()
+        guard let iceButton = items.first(where: {
+            $0.isControlItem && $0.bounds.width > 0 && $0.bounds.width < 60
+        }) else {
+            return [:]
+        }
+        var bundleByPID = [pid_t: String]()
+        for case let app as NSRunningApplication in NSWorkspace.shared.runningApplications {
+            if let bundleID = app.bundleIdentifier {
+                bundleByPID[app.processIdentifier] = bundleID
+            }
+        }
+        var inferred = [String: MacOS27Section]()
+        let ownBundle = Bundle.main.bundleIdentifier
+        if let ownBundle {
+            inferred[ownBundle] = .visible
+        }
+        for item in items where !item.isControlItem && item.canBeHidden {
+            guard let bundleID = bundleByPID[item.ownerPID], bundleID != ownBundle else {
+                continue
+            }
+            // An application with several items hides when any of them sits
+            // left of the button.
+            if item.bounds.midX < iceButton.bounds.midX || inferred[bundleID] == .hidden {
+                inferred[bundleID] = .hidden
+            } else {
+                inferred[bundleID] = .visible
+            }
+        }
+        return inferred
+    }
+
     /// Derives what to conceal from Ice's sections and applies it.
     func update() {
         guard let appState, MenuBarAssessmentAssertion27.isAvailable else {
@@ -116,27 +154,10 @@ final class Concealer27 {
         if let suspendedUntil, ContinuousClock.now < suspendedUntil {
             return
         }
-        let applications = NSWorkspace.shared.runningApplications
-        let running = Set(applications.compactMap(\.bundleIdentifier))
-        let layout = SectionLayout27.effectiveLayout(observed: [:], saved: savedLayout, running: running)
-        let target = ConcealmentPlanner27.concealedSets(
-            layout: layout,
-            state: revealState(appState),
-            temporarilyShown: Set(temporarilyShown.keys)
-        )
-        let concealed = ConcealmentPlanner27.effectivelyConcealed(sets: target)
-        isConcealing = !target.isEmpty
-        defer { MenuBarItemProvider27.setConcealedPIDs(concealedPIDs) }
-        concealedPIDs = Set(applications.compactMap { application in
-            guard let bundleID = application.bundleIdentifier, concealed.contains(bundleID) else {
-                return nil
-            }
-            return application.processIdentifier
-        })
-        lastChangeAt = .now
+        let saved = savedLayout
+        let previous = applyTask
         updateGeneration += 1
         let generation = updateGeneration
-        let previous = applyTask
         let task = Task { [weak self, controller, logger] in
             await previous?.value
             // Applies follow one another, so a burst of updates queued one apply behind the
@@ -146,6 +167,30 @@ final class Concealer27 {
             guard let self, updateGeneration == generation else {
                 return
             }
+            let applications = NSWorkspace.shared.runningApplications
+            let running = Set(applications.compactMap(\.bundleIdentifier))
+            // Applications the user has not assigned in the Layout editor keep
+            // Ice's pre-27 meaning of the button: everything left of it hides.
+            var observed = await Self.layoutInferredByPosition()
+            for bundleID in saved.keys {
+                observed.removeValue(forKey: bundleID)
+            }
+            let layout = SectionLayout27.effectiveLayout(observed: observed, saved: saved, running: running)
+            let target = ConcealmentPlanner27.concealedSets(
+                layout: layout,
+                state: revealState(appState),
+                temporarilyShown: Set(temporarilyShown.keys)
+            )
+            let concealed = ConcealmentPlanner27.effectivelyConcealed(sets: target)
+            isConcealing = !target.isEmpty
+            concealedPIDs = Set(applications.compactMap { application in
+                guard let bundleID = application.bundleIdentifier, concealed.contains(bundleID) else {
+                    return nil
+                }
+                return application.processIdentifier
+            })
+            MenuBarItemProvider27.setConcealedPIDs(concealedPIDs)
+            lastChangeAt = .now
             do {
                 try await controller.apply(target: target, running: running)
             } catch {

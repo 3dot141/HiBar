@@ -85,7 +85,7 @@ struct AboutSettingsPane: View {
                 }
 
                 VStack(alignment: .leading) {
-                    Text("Ice")
+                    Text("HiBar")
                         .font(.system(size: 80))
                         .foregroundStyle(.primary)
 

@@ -9,7 +9,9 @@ HiBar is a fork of [Ice](https://github.com/jordanbaird/Ice) with a different hi
 ## What's different from upstream Ice
 
 - **Assessment-mode hiding backend** — hidden items are removed through `MenuBarAgent`'s assessment-mode assertions (private `MenuBarClientCore`), which works on non-notched displays where the spacer/overflow approach breaks. Adapted from Ice PR [#995](https://github.com/jordanbaird/Ice/pull/995) / [#1001](https://github.com/jordanbaird/Ice/pull/1001) (RabenkoYevhenii, Carlos Santos et al.).
-- **Zero-configuration hiding** — items left of HiBar's button are hidden automatically, like Ice's pre-27 behavior. A layout saved in the editor overrides this per app. (See `Concealer27.layoutInferredByPosition`.)
+- **Sections are inferred once, then kept** — items left of HiBar's button are hidden automatically on first run, and the result is stored: the button can be dragged anywhere afterwards without changing sections. A layout edited in the Layout editor always wins. (See `Concealer27.layoutInferredByPosition`.)
+- **The always-hidden section is disabled on macOS 27** — its control item collapses alongside the others and breaks the section boundaries, so the option is hidden and force-disabled.
+- **The status item icon is padded symmetrically** — macOS 27 leaves no gap between status items, and a narrow symbol otherwise sits lopsided in its item.
 - **Ad-hoc signing is not supported for hiding** — the assertion must be held by a signed app bundle. Build with a real signing identity.
 
 ## Building

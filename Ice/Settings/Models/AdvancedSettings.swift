@@ -63,6 +63,13 @@ final class AdvancedSettings: ObservableObject {
                 sectionDividerStyle = style
             }
         }
+
+        if #available(macOS 27.0, *) {
+            // The always-hidden control item collapses alongside the others on
+            // macOS 27, which breaks the section boundaries, so the section
+            // stays off regardless of what was stored.
+            enableAlwaysHiddenSection = false
+        }
     }
 
     /// Configures the internal observers for the model.

@@ -26,7 +26,12 @@ struct AdvancedSettingsPane: View {
     var body: some View {
         IceForm {
             IceSection("Menu Bar Sections") {
-                enableAlwaysHiddenSection
+                // The always-hidden control item collapses alongside the others
+                // on macOS 27, which breaks the section boundaries, so the
+                // section cannot be enabled there.
+                if #unavailable(macOS 27.0) {
+                    enableAlwaysHiddenSection
+                }
                 showAllSectionsOnUserDrag
                 // Ice's dividers are collapsed on macOS 27, so they have no style.
                 if #unavailable(macOS 27.0) {

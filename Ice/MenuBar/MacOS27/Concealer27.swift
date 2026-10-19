@@ -47,6 +47,12 @@ final class Concealer27 {
         return stored.compactMapValues(MacOS27Section.init(rawValue:))
     }
 
+    /// The layout last derived and applied, which infers sections from item
+    /// positions as well. The layout editor reads it through
+    /// ``cacheFromEffectiveLayout(items:displayID:)``, so what it shows matches
+    /// what is actually hidden, not just what was assigned by hand.
+    private var effectiveLayoutByBundle = [String: MacOS27Section]()
+
     func performSetup(with appState: AppState) {
         self.appState = appState
         guard MenuBarAssessmentAssertion27.isAvailable else {
@@ -110,14 +116,34 @@ final class Concealer27 {
 
     /// Infers a section for every application from where its items currently
     /// sit on the bar: items left of Ice's own button belong to the hidden
-    /// section, which is what Ice's pre-27 dividers meant. Ice itself is
-    /// always visible, so its button can always bring the hidden applications
-    /// back. A layout the user saved in the Layout editor overrides this.
-    private static func layoutInferredByPosition() async -> [String: MacOS27Section] {
+    /// section, items left of the always-hidden button to that one, which is
+    /// what Ice's pre-27 dividers meant. Ice itself is always visible, so its
+    /// button can always bring the hidden applications back. A layout the
+    /// user saved in the Layout editor overrides this.
+    private func layoutInferredByPosition() async -> [String: MacOS27Section] {
+        // The bar reports the frames of Ice's own items collapsed and overlapping,
+        // and the collapsed hidden-section item keeps a stale frame at the far
+        // end of the bar, so the boundary is Ice's own button — the one item
+        // that stays fully drawn — read first-hand from its window rather than
+        // through the window's frame notifications, which do not fire reliably.
+        let menuBarManager = appState?.menuBarManager
+        func controlFrame(_ name: MenuBarSection.Name) -> CGRect? {
+            guard let controlItem = menuBarManager?.section(withName: name)?.controlItem else {
+                return nil
+            }
+            return controlItem.window?.frame ?? controlItem.frame
+        }
+        guard let iceFrame = controlFrame(.visible) else {
+            return [:]
+        }
+        let alwaysHiddenFrame = controlFrame(.alwaysHidden)
         let items = await MenuBarItemProvider27.items()
-        guard let iceButton = items.first(where: {
-            $0.isControlItem && $0.bounds.width > 0 && $0.bounds.width < 60
-        }) else {
+        let hideableItems = items.filter { !$0.isControlItem && $0.canBeHidden }
+        // When every hideable item sits left of the boundary, the controls have
+        // been reset to the right end of the bar and position says nothing about
+        // sections; nothing is inferred, so everything stays visible. Dragging
+        // the controls apart from the end restores the inference.
+        guard hideableItems.contains(where: { $0.bounds.midX > iceFrame.midX }) else {
             return [:]
         }
         var bundleByPID = [pid_t: String]()
@@ -131,16 +157,22 @@ final class Concealer27 {
         if let ownBundle {
             inferred[ownBundle] = .visible
         }
-        for item in items where !item.isControlItem && item.canBeHidden {
+        for item in hideableItems {
             guard let bundleID = bundleByPID[item.ownerPID], bundleID != ownBundle else {
                 continue
             }
-            // An application with several items hides when any of them sits
-            // left of the button.
-            if item.bounds.midX < iceButton.bounds.midX || inferred[bundleID] == .hidden {
-                inferred[bundleID] = .hidden
+            let section: MacOS27Section
+            if let alwaysHiddenFrame, item.bounds.midX < alwaysHiddenFrame.midX {
+                section = .alwaysHidden
+            } else if item.bounds.midX < iceFrame.midX {
+                section = .hidden
             } else {
-                inferred[bundleID] = .visible
+                section = .visible
+            }
+            // An application with several items takes the section of its
+            // left-most item, which is the most concealed one.
+            if section.rawValue >= inferred[bundleID]?.rawValue ?? 0 {
+                inferred[bundleID] = section
             }
         }
         return inferred
@@ -169,13 +201,27 @@ final class Concealer27 {
             }
             let applications = NSWorkspace.shared.runningApplications
             let running = Set(applications.compactMap(\.bundleIdentifier))
-            // Applications the user has not assigned in the Layout editor keep
-            // Ice's pre-27 meaning of the button: everything left of it hides.
-            var observed = await Self.layoutInferredByPosition()
-            for bundleID in saved.keys {
-                observed.removeValue(forKey: bundleID)
+            // A successful inference fills the layout for applications the user
+            // has not assigned, and is then kept: the sections no longer follow
+            // the button around the bar, which macOS 27 reorders on its own.
+            // An empty inference — the controls sit at the end of the bar, or
+            // their frames are unavailable — leaves the stored layout alone.
+            let observed = await layoutInferredByPosition()
+            if !observed.isEmpty {
+                var updated = saved
+                for (bundleID, section) in observed where updated[bundleID] == nil {
+                    updated[bundleID] = section
+                }
+                if updated != saved {
+                    Defaults.set(updated.mapValues(\.rawValue), forKey: .macOS27Layout)
+                }
             }
-            let layout = SectionLayout27.effectiveLayout(observed: observed, saved: saved, running: running)
+            var observedForLayout = observed
+            for bundleID in saved.keys {
+                observedForLayout.removeValue(forKey: bundleID)
+            }
+            let layout = SectionLayout27.effectiveLayout(observed: observedForLayout, saved: saved, running: running)
+            effectiveLayoutByBundle = layout
             let target = ConcealmentPlanner27.concealedSets(
                 layout: layout,
                 state: revealState(appState),
@@ -328,16 +374,20 @@ final class Concealer27 {
     func setSection(_ section: MacOS27Section, for bundleID: String) {
         let updated = SectionLayout27.settingSection(section, for: bundleID, in: savedLayout)
         Defaults.set(updated.mapValues(\.rawValue), forKey: .macOS27Layout)
+        // The cache is rebuilt right away, before `update` has applied the new
+        // layout, so the editor follows the drag instead of flashing back.
+        effectiveLayoutByBundle[bundleID] = section
         update()
         Task { [weak self] in
             await self?.appState?.itemManager.cacheItemsRegardless()
         }
     }
 
-    /// Builds the item cache from the saved layout rather than the order on the bar.
-    func cacheFromSavedLayout(items: [MenuBarItem], displayID: CGDirectDisplayID?) -> MenuBarItemManager.ItemCache {
+    /// Builds the item cache from the layout last applied — inferred sections
+    /// included — rather than the order on the bar.
+    func cacheFromEffectiveLayout(items: [MenuBarItem], displayID: CGDirectDisplayID?) -> MenuBarItemManager.ItemCache {
         var cache = MenuBarItemManager.ItemCache(displayID: displayID)
-        let layout = savedLayout
+        let layout = effectiveLayoutByBundle
         let bundleIDs = MenuBarItem.sourceBundleIDs(of: items)
         for item in items.sorted(by: { $0.bounds.minX < $1.bounds.minX }) where item.canBeHidden && !item.isSystemClone {
             if item.isControlItem {
@@ -430,3 +480,4 @@ extension MacOS27Section {
         }
     }
 }
+

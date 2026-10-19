@@ -497,6 +497,26 @@ extension NSImage {
         resizedImage.isTemplate = isTemplate
         return resizedImage
     }
+
+    /// Returns a new image with the given padding added on the left and right,
+    /// drawing this image centered on the wider canvas.
+    ///
+    /// - Note: This method retains the ``isTemplate`` property.
+    ///
+    /// - Parameter padding: The padding, in points, to add to each side.
+    func paddedHorizontally(by padding: CGFloat) -> NSImage {
+        let paddedImage = NSImage(size: CGSize(width: size.width + padding * 2, height: size.height), flipped: false) { bounds in
+            self.draw(
+                in: NSRect(
+                    origin: CGPoint(x: (bounds.width - self.size.width) / 2, y: (bounds.height - self.size.height) / 2),
+                    size: self.size
+                )
+            )
+            return true
+        }
+        paddedImage.isTemplate = isTemplate
+        return paddedImage
+    }
 }
 
 // MARK: - NSScreen

@@ -375,6 +375,12 @@ final class ControlItem {
                 image = originalImage.resized(to: newSize)
             }
 
+            if #available(macOS 27.0, *) {
+                // macOS 27 leaves no gap between status items, so the icon is
+                // padded symmetrically to keep its neighbours at an even
+                // distance on both sides.
+                image = image?.paddedHorizontally(by: 4)
+            }
             button.image = image
         case .hidden, .alwaysHidden:
             if #available(macOS 27.0, *) {
